@@ -5,16 +5,410 @@ MUSE Language - Speech Processing Service
 - STT (Speech-to-Text)
 - TTS (Text-to-Speech)
 - 발음 정확도 평가
+- IPA 발음 기호 변환
+- 음절 분리 및 강세 분석
 """
 
 from typing import Optional, Dict, Any, List, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import io
 import base64
 import numpy as np
+import re
 from openai import OpenAI
 
 from app.core.config import settings
+
+
+# ============================================================
+# IPA 발음 사전 (주요 영어 단어)
+# ============================================================
+IPA_DICTIONARY = {
+    "en": {
+        # Common words
+        "hello": "həˈloʊ",
+        "world": "wɜːrld",
+        "the": "ðə",
+        "a": "ə",
+        "an": "æn",
+        "is": "ɪz",
+        "are": "ɑːr",
+        "was": "wʌz",
+        "were": "wɜːr",
+        "be": "biː",
+        "been": "bɪn",
+        "being": "ˈbiːɪŋ",
+        "have": "hæv",
+        "has": "hæz",
+        "had": "hæd",
+        "do": "duː",
+        "does": "dʌz",
+        "did": "dɪd",
+        "will": "wɪl",
+        "would": "wʊd",
+        "could": "kʊd",
+        "should": "ʃʊd",
+        "may": "meɪ",
+        "might": "maɪt",
+        "must": "mʌst",
+        "can": "kæn",
+        "this": "ðɪs",
+        "that": "ðæt",
+        "these": "ðiːz",
+        "those": "ðoʊz",
+        "i": "aɪ",
+        "you": "juː",
+        "he": "hiː",
+        "she": "ʃiː",
+        "it": "ɪt",
+        "we": "wiː",
+        "they": "ðeɪ",
+        "what": "wʌt",
+        "which": "wɪtʃ",
+        "who": "huː",
+        "when": "wen",
+        "where": "wer",
+        "why": "waɪ",
+        "how": "haʊ",
+        "all": "ɔːl",
+        "each": "iːtʃ",
+        "every": "ˈevri",
+        "both": "boʊθ",
+        "few": "fjuː",
+        "more": "mɔːr",
+        "most": "moʊst",
+        "other": "ˈʌðər",
+        "some": "sʌm",
+        "such": "sʌtʃ",
+        "no": "noʊ",
+        "not": "nɑːt",
+        "only": "ˈoʊnli",
+        "own": "oʊn",
+        "same": "seɪm",
+        "so": "soʊ",
+        "than": "ðæn",
+        "too": "tuː",
+        "very": "ˈveri",
+        "just": "dʒʌst",
+        "about": "əˈbaʊt",
+        "after": "ˈæftər",
+        "again": "əˈɡen",
+        "air": "er",
+        "also": "ˈɔːlsoʊ",
+        "always": "ˈɔːlweɪz",
+        "animal": "ˈænɪməl",
+        "another": "əˈnʌðər",
+        "answer": "ˈænsər",
+        "any": "ˈeni",
+        "ask": "æsk",
+        "away": "əˈweɪ",
+        "back": "bæk",
+        "because": "bɪˈkɔːz",
+        "before": "bɪˈfɔːr",
+        "begin": "bɪˈɡɪn",
+        "between": "bɪˈtwiːn",
+        "big": "bɪɡ",
+        "book": "bʊk",
+        "boy": "bɔɪ",
+        "bring": "brɪŋ",
+        "build": "bɪld",
+        "but": "bʌt",
+        "by": "baɪ",
+        "call": "kɔːl",
+        "came": "keɪm",
+        "change": "tʃeɪndʒ",
+        "children": "ˈtʃɪldrən",
+        "city": "ˈsɪti",
+        "close": "kloʊz",
+        "come": "kʌm",
+        "country": "ˈkʌntri",
+        "day": "deɪ",
+        "different": "ˈdɪfərənt",
+        "earth": "ɜːrθ",
+        "eat": "iːt",
+        "end": "end",
+        "enough": "ɪˈnʌf",
+        "even": "ˈiːvən",
+        "example": "ɪɡˈzæmpəl",
+        "eye": "aɪ",
+        "face": "feɪs",
+        "family": "ˈfæməli",
+        "far": "fɑːr",
+        "father": "ˈfɑːðər",
+        "feel": "fiːl",
+        "find": "faɪnd",
+        "first": "fɜːrst",
+        "follow": "ˈfɑːloʊ",
+        "food": "fuːd",
+        "for": "fɔːr",
+        "form": "fɔːrm",
+        "found": "faʊnd",
+        "four": "fɔːr",
+        "friend": "frend",
+        "from": "frʌm",
+        "get": "ɡet",
+        "girl": "ɡɜːrl",
+        "give": "ɡɪv",
+        "go": "ɡoʊ",
+        "good": "ɡʊd",
+        "government": "ˈɡʌvərnmənt",
+        "great": "ɡreɪt",
+        "group": "ɡruːp",
+        "grow": "ɡroʊ",
+        "hand": "hænd",
+        "happen": "ˈhæpən",
+        "happy": "ˈhæpi",
+        "head": "hed",
+        "hear": "hɪr",
+        "help": "help",
+        "here": "hɪr",
+        "high": "haɪ",
+        "home": "hoʊm",
+        "house": "haʊs",
+        "idea": "aɪˈdiːə",
+        "important": "ɪmˈpɔːrtənt",
+        "in": "ɪn",
+        "interest": "ˈɪntrəst",
+        "into": "ˈɪntuː",
+        "keep": "kiːp",
+        "kind": "kaɪnd",
+        "know": "noʊ",
+        "land": "lænd",
+        "language": "ˈlæŋɡwɪdʒ",
+        "large": "lɑːrdʒ",
+        "last": "læst",
+        "late": "leɪt",
+        "later": "ˈleɪtər",
+        "learn": "lɜːrn",
+        "leave": "liːv",
+        "left": "left",
+        "let": "let",
+        "letter": "ˈletər",
+        "life": "laɪf",
+        "light": "laɪt",
+        "like": "laɪk",
+        "line": "laɪn",
+        "list": "lɪst",
+        "little": "ˈlɪtəl",
+        "live": "lɪv",
+        "long": "lɔːŋ",
+        "look": "lʊk",
+        "love": "lʌv",
+        "made": "meɪd",
+        "make": "meɪk",
+        "man": "mæn",
+        "many": "ˈmeni",
+        "mean": "miːn",
+        "men": "men",
+        "money": "ˈmʌni",
+        "mother": "ˈmʌðər",
+        "move": "muːv",
+        "much": "mʌtʃ",
+        "music": "ˈmjuːzɪk",
+        "name": "neɪm",
+        "near": "nɪr",
+        "need": "niːd",
+        "never": "ˈnevər",
+        "new": "nuː",
+        "next": "nekst",
+        "night": "naɪt",
+        "number": "ˈnʌmbər",
+        "of": "ʌv",
+        "off": "ɔːf",
+        "often": "ˈɔːfən",
+        "old": "oʊld",
+        "on": "ɑːn",
+        "once": "wʌns",
+        "one": "wʌn",
+        "open": "ˈoʊpən",
+        "or": "ɔːr",
+        "order": "ˈɔːrdər",
+        "our": "aʊr",
+        "out": "aʊt",
+        "over": "ˈoʊvər",
+        "page": "peɪdʒ",
+        "paper": "ˈpeɪpər",
+        "part": "pɑːrt",
+        "people": "ˈpiːpəl",
+        "picture": "ˈpɪktʃər",
+        "place": "pleɪs",
+        "play": "pleɪ",
+        "point": "pɔɪnt",
+        "problem": "ˈprɑːbləm",
+        "public": "ˈpʌblɪk",
+        "put": "pʊt",
+        "question": "ˈkwestʃən",
+        "read": "riːd",
+        "really": "ˈriːəli",
+        "right": "raɪt",
+        "room": "ruːm",
+        "run": "rʌn",
+        "said": "sed",
+        "same": "seɪm",
+        "say": "seɪ",
+        "school": "skuːl",
+        "see": "siː",
+        "seem": "siːm",
+        "sentence": "ˈsentəns",
+        "set": "set",
+        "show": "ʃoʊ",
+        "side": "saɪd",
+        "small": "smɔːl",
+        "sound": "saʊnd",
+        "spell": "spel",
+        "stand": "stænd",
+        "start": "stɑːrt",
+        "state": "steɪt",
+        "still": "stɪl",
+        "stop": "stɑːp",
+        "story": "ˈstɔːri",
+        "student": "ˈstuːdənt",
+        "study": "ˈstʌdi",
+        "system": "ˈsɪstəm",
+        "take": "teɪk",
+        "talk": "tɔːk",
+        "teach": "tiːtʃ",
+        "teacher": "ˈtiːtʃər",
+        "tell": "tel",
+        "test": "test",
+        "thank": "θæŋk",
+        "then": "ðen",
+        "there": "ðer",
+        "thing": "θɪŋ",
+        "think": "θɪŋk",
+        "three": "θriː",
+        "through": "θruː",
+        "time": "taɪm",
+        "today": "təˈdeɪ",
+        "together": "təˈɡeðər",
+        "tomorrow": "təˈmɑːroʊ",
+        "try": "traɪ",
+        "turn": "tɜːrn",
+        "two": "tuː",
+        "under": "ˈʌndər",
+        "understand": "ˌʌndərˈstænd",
+        "until": "ənˈtɪl",
+        "up": "ʌp",
+        "us": "ʌs",
+        "use": "juːz",
+        "usually": "ˈjuːʒuəli",
+        "want": "wɑːnt",
+        "water": "ˈwɔːtər",
+        "way": "weɪ",
+        "week": "wiːk",
+        "well": "wel",
+        "while": "waɪl",
+        "with": "wɪð",
+        "without": "wɪˈðaʊt",
+        "woman": "ˈwʊmən",
+        "women": "ˈwɪmɪn",
+        "word": "wɜːrd",
+        "work": "wɜːrk",
+        "world": "wɜːrld",
+        "write": "raɪt",
+        "year": "jɪr",
+        "yes": "jes",
+        "yesterday": "ˈjestərdeɪ",
+        "young": "jʌŋ",
+        "your": "jɔːr",
+        # Difficult pronunciation words
+        "pronunciation": "prəˌnʌnsiˈeɪʃən",
+        "necessary": "ˈnesəseri",
+        "restaurant": "ˈrestərɑːnt",
+        "comfortable": "ˈkʌmftərbəl",
+        "vegetable": "ˈvedʒtəbəl",
+        "temperature": "ˈtemprətʃər",
+        "actually": "ˈæktʃuəli",
+        "beautiful": "ˈbjuːtɪfəl",
+        "chocolate": "ˈtʃɔːklət",
+        "library": "ˈlaɪbreri",
+        "wednesday": "ˈwenzdeɪ",
+        "February": "ˈfebrueri",
+        "colonel": "ˈkɜːrnəl",
+        "island": "ˈaɪlənd",
+        "receipt": "rɪˈsiːt",
+        "queue": "kjuː",
+        "suite": "swiːt",
+        "yacht": "jɑːt",
+        "chaos": "ˈkeɪɑːs",
+        "rhythm": "ˈrɪðəm",
+    },
+    "ja": {
+        "こんにちは": "koɴnitɕiwa",
+        "ありがとう": "ariɡatoː",
+        "さようなら": "sajoːnara",
+        "すみません": "sɯmimaseɴ",
+        "おはよう": "ohajoː",
+        "はい": "hai",
+        "いいえ": "iːe",
+    },
+    "zh": {
+        "你好": "nǐ hǎo",
+        "谢谢": "xiè xiè",
+        "再见": "zài jiàn",
+        "对不起": "duì bu qǐ",
+        "是": "shì",
+        "不是": "bú shì",
+    },
+    "es": {
+        "hola": "ˈo.la",
+        "gracias": "ˈɡɾa.θjas",
+        "adiós": "a.ˈðjos",
+        "por favor": "poɾ faˈβoɾ",
+        "bueno": "ˈbwe.no",
+    },
+    "fr": {
+        "bonjour": "bɔ̃.ʒuʁ",
+        "merci": "mɛʁ.si",
+        "au revoir": "o ʁə.vwaʁ",
+        "s'il vous plaît": "sil vu plɛ",
+        "oui": "wi",
+        "non": "nɔ̃",
+    }
+}
+
+# ============================================================
+# 음절 분리 규칙
+# ============================================================
+SYLLABLE_RULES = {
+    "en": {
+        # 모음 패턴
+        "vowels": "aeiouyAEIOUY",
+        # 이중 자음 (분리하지 않음)
+        "consonant_blends": [
+            "bl", "br", "ch", "cl", "cr", "dr", "fl", "fr", "gl", "gr",
+            "pl", "pr", "sc", "sh", "sk", "sl", "sm", "sn", "sp", "st",
+            "sw", "th", "tr", "tw", "wh", "wr", "sch", "scr", "shr",
+            "spl", "spr", "squ", "str", "thr"
+        ],
+        # 이중 모음 (하나의 음절)
+        "vowel_teams": [
+            "ai", "ay", "ea", "ee", "ei", "ey", "ie", "oa", "oe", "oi",
+            "oo", "ou", "ow", "oy", "ue", "ui"
+        ]
+    }
+}
+
+# ============================================================
+# 발음 난이도 데이터
+# ============================================================
+PRONUNCIATION_DIFFICULTY = {
+    "en": {
+        # 한국어 화자에게 어려운 발음
+        "th_voiced": {"sound": "ð", "difficulty": 5, "tip": "Put your tongue between your teeth and vibrate"},
+        "th_voiceless": {"sound": "θ", "difficulty": 5, "tip": "Put your tongue between your teeth without vibration"},
+        "r_sound": {"sound": "r", "difficulty": 4, "tip": "Curl your tongue back, don't touch the roof"},
+        "l_sound": {"sound": "l", "difficulty": 3, "tip": "Touch the roof of your mouth with tongue tip"},
+        "v_sound": {"sound": "v", "difficulty": 3, "tip": "Bite your lower lip gently and vibrate"},
+        "f_sound": {"sound": "f", "difficulty": 2, "tip": "Bite your lower lip gently without vibration"},
+        "z_sound": {"sound": "z", "difficulty": 3, "tip": "Like 's' but with voice vibration"},
+        "ʃ_sound": {"sound": "ʃ", "difficulty": 2, "tip": "Like 'sh' in 'ship'"},
+        "ʒ_sound": {"sound": "ʒ", "difficulty": 4, "tip": "Like 's' in 'measure'"},
+        "æ_sound": {"sound": "æ", "difficulty": 4, "tip": "Open mouth wide, tongue low and front"},
+        "ʌ_sound": {"sound": "ʌ", "difficulty": 3, "tip": "Relaxed, central vowel like 'uh'"},
+        "ɪ_sound": {"sound": "ɪ", "difficulty": 2, "tip": "Short 'i' sound, relax your mouth"},
+    }
+}
 
 
 @dataclass
@@ -29,6 +423,22 @@ class PronunciationResult:
     phoneme_errors: List[Dict[str, str]]
     feedback: str
     suggestions: List[str]
+    difficult_sounds: List[Dict[str, Any]] = field(default_factory=list)
+    ipa_comparison: Optional[Dict[str, str]] = None
+
+
+@dataclass
+class WordPronunciationInfo:
+    """단어 발음 정보."""
+    word: str
+    ipa: str
+    syllables: List[str]
+    stress_pattern: str  # e.g., "1-0-0" for 3 syllables, stress on first
+    audio_base64: Optional[str] = None
+    difficulty_level: int = 1  # 1-5
+    difficult_sounds: List[Dict[str, Any]] = field(default_factory=list)
+    similar_words: List[str] = field(default_factory=list)
+    common_mistakes: List[str] = field(default_factory=list)
 
 
 class SpeechProcessor:
@@ -360,11 +770,366 @@ class SpeechProcessor:
         }
 
     def _get_ipa(self, word: str, language: str) -> str:
-        """IPA 발음 기호 (placeholder)."""
-        # 실제 구현에서는 발음 사전 API 사용
-        return f"/{word}/"
+        """IPA 발음 기호 조회."""
+        word_lower = word.lower().strip()
+        lang_dict = IPA_DICTIONARY.get(language, IPA_DICTIONARY.get("en", {}))
+
+        # 사전에서 직접 조회
+        if word_lower in lang_dict:
+            return f"/{lang_dict[word_lower]}/"
+
+        # 영어의 경우 규칙 기반 IPA 생성 시도
+        if language == "en":
+            return f"/{self._generate_ipa_english(word_lower)}/"
+
+        return f"/{word_lower}/"
+
+    def _generate_ipa_english(self, word: str) -> str:
+        """영어 단어의 규칙 기반 IPA 생성."""
+        # 기본적인 영어 철자-발음 규칙
+        ipa_rules = {
+            # 이중 모음
+            "oo": "uː",
+            "ee": "iː",
+            "ea": "iː",
+            "ai": "eɪ",
+            "ay": "eɪ",
+            "oa": "oʊ",
+            "ow": "aʊ",
+            "ou": "aʊ",
+            "oi": "ɔɪ",
+            "oy": "ɔɪ",
+            # 자음
+            "th": "θ",
+            "sh": "ʃ",
+            "ch": "tʃ",
+            "ph": "f",
+            "wh": "w",
+            "ck": "k",
+            "ng": "ŋ",
+            # 단일 모음 (기본)
+            "a": "æ",
+            "e": "ɛ",
+            "i": "ɪ",
+            "o": "ɑ",
+            "u": "ʌ",
+        }
+
+        result = word
+        for pattern, replacement in sorted(ipa_rules.items(), key=lambda x: -len(x[0])):
+            result = result.replace(pattern, replacement)
+
+        return result
 
     def _split_syllables(self, word: str, language: str) -> List[str]:
-        """음절 분리 (placeholder)."""
-        # 실제 구현에서는 언어별 음절 분리 라이브러리 사용
-        return [word]
+        """음절 분리."""
+        if language != "en":
+            return [word]
+
+        rules = SYLLABLE_RULES.get("en", {})
+        vowels = rules.get("vowels", "aeiouy")
+
+        word_lower = word.lower()
+        syllables = []
+        current = ""
+
+        i = 0
+        while i < len(word_lower):
+            current += word_lower[i]
+
+            # 현재 위치가 모음이고, 다음 문자가 자음이면
+            if word_lower[i] in vowels:
+                # 다음 문자들 확인
+                if i + 1 < len(word_lower):
+                    next_char = word_lower[i + 1]
+
+                    # 다음이 자음이고, 그 다음이 모음이면 여기서 분리
+                    if next_char not in vowels and i + 2 < len(word_lower):
+                        if word_lower[i + 2] in vowels:
+                            syllables.append(current)
+                            current = ""
+            i += 1
+
+        if current:
+            syllables.append(current)
+
+        # 너무 짧은 음절 병합
+        if len(syllables) > 1 and len(syllables[-1]) == 1:
+            syllables[-2] += syllables[-1]
+            syllables = syllables[:-1]
+
+        return syllables if syllables else [word]
+
+    def _get_stress_pattern(self, word: str, language: str) -> str:
+        """강세 패턴 분석."""
+        syllables = self._split_syllables(word, language)
+        n_syllables = len(syllables)
+
+        if n_syllables == 1:
+            return "1"
+
+        # IPA에서 강세 마커 확인
+        ipa = self._get_ipa(word, language)
+        if "ˈ" in ipa:  # 주강세
+            # 강세 위치 찾기
+            ipa_clean = ipa.strip("/")
+            stress_pos = ipa_clean.find("ˈ")
+            # 대략적인 음절 위치 계산
+            if stress_pos < len(ipa_clean) // n_syllables:
+                return "1" + "-0" * (n_syllables - 1)
+            elif stress_pos < 2 * len(ipa_clean) // n_syllables:
+                return "0-1" + "-0" * (n_syllables - 2)
+            else:
+                return "0" * (n_syllables - 1) + "-1"
+
+        # 영어 기본 규칙: 2음절은 보통 첫 음절에 강세
+        if n_syllables == 2:
+            return "1-0"
+        elif n_syllables == 3:
+            return "1-0-0"
+        else:
+            return "-".join(["1"] + ["0"] * (n_syllables - 1))
+
+    def _analyze_difficult_sounds(self, word: str, language: str) -> List[Dict[str, Any]]:
+        """단어 내 어려운 발음 분석."""
+        if language != "en":
+            return []
+
+        difficulties = PRONUNCIATION_DIFFICULTY.get("en", {})
+        ipa = self._get_ipa(word, language).strip("/")
+        found = []
+
+        for name, info in difficulties.items():
+            sound = info["sound"]
+            if sound in ipa or sound in word.lower():
+                found.append({
+                    "sound": sound,
+                    "difficulty": info["difficulty"],
+                    "tip": info["tip"],
+                    "position": word.lower().find(sound[0]) if len(sound) == 1 else -1
+                })
+
+        return sorted(found, key=lambda x: -x["difficulty"])
+
+    def _get_similar_words(self, word: str, language: str) -> List[str]:
+        """발음이 비슷한 단어 찾기."""
+        lang_dict = IPA_DICTIONARY.get(language, {})
+        target_ipa = lang_dict.get(word.lower(), "")
+
+        if not target_ipa:
+            return []
+
+        similar = []
+        for w, ipa in lang_dict.items():
+            if w != word.lower():
+                # IPA 유사도 계산
+                similarity = self._calculate_word_similarity(target_ipa, ipa)
+                if similarity > 0.6:
+                    similar.append(w)
+
+        return similar[:5]
+
+    def _get_common_mistakes(self, word: str, language: str) -> List[str]:
+        """흔한 발음 실수 패턴."""
+        mistakes = []
+        word_lower = word.lower()
+
+        if language == "en":
+            # th 발음 실수
+            if "th" in word_lower:
+                mistakes.append("'th' sound: Don't pronounce as 's' or 'd'")
+            # r/l 혼동
+            if "r" in word_lower:
+                mistakes.append("'r' sound: Don't flatten the tongue")
+            if "l" in word_lower:
+                mistakes.append("'l' sound: Touch the roof with tongue tip")
+            # v/b 혼동
+            if "v" in word_lower:
+                mistakes.append("'v' sound: Use teeth on lower lip, not like 'b'")
+            # 묵음 문자
+            silent_patterns = {
+                "kn": "Silent 'k' at the beginning",
+                "wr": "Silent 'w' at the beginning",
+                "mb": "Silent 'b' at the end",
+                "gh": "'gh' may be silent or pronounced as 'f'",
+            }
+            for pattern, msg in silent_patterns.items():
+                if pattern in word_lower:
+                    mistakes.append(msg)
+
+        return mistakes
+
+    async def get_detailed_word_info(
+        self,
+        word: str,
+        language: str = "en"
+    ) -> WordPronunciationInfo:
+        """
+        단어의 상세 발음 정보 조회
+
+        Args:
+            word: 단어
+            language: 언어
+
+        Returns:
+            WordPronunciationInfo: 상세 발음 정보
+        """
+        ipa = self._get_ipa(word, language)
+        syllables = self._split_syllables(word, language)
+        stress = self._get_stress_pattern(word, language)
+        difficult_sounds = self._analyze_difficult_sounds(word, language)
+        similar = self._get_similar_words(word, language)
+        mistakes = self._get_common_mistakes(word, language)
+
+        # 난이도 계산
+        difficulty = 1
+        if difficult_sounds:
+            difficulty = max(d["difficulty"] for d in difficult_sounds)
+
+        # TTS 오디오 생성
+        try:
+            audio_data = await self.synthesize(word, speed=0.8)
+            audio_base64 = base64.b64encode(audio_data).decode()
+        except Exception:
+            audio_base64 = None
+
+        return WordPronunciationInfo(
+            word=word,
+            ipa=ipa,
+            syllables=syllables,
+            stress_pattern=stress,
+            audio_base64=audio_base64,
+            difficulty_level=difficulty,
+            difficult_sounds=difficult_sounds,
+            similar_words=similar,
+            common_mistakes=mistakes
+        )
+
+    async def analyze_sentence_pronunciation(
+        self,
+        sentence: str,
+        language: str = "en"
+    ) -> Dict[str, Any]:
+        """
+        문장 전체의 발음 분석
+
+        Args:
+            sentence: 분석할 문장
+            language: 언어
+
+        Returns:
+            문장 발음 분석 결과
+        """
+        words = sentence.split()
+        word_analyses = []
+        total_difficulty = 0
+
+        for word in words:
+            # 구두점 제거
+            clean_word = re.sub(r'[^\w]', '', word)
+            if clean_word:
+                info = await self.get_detailed_word_info(clean_word, language)
+                word_analyses.append({
+                    "word": clean_word,
+                    "ipa": info.ipa,
+                    "difficulty": info.difficulty_level,
+                    "difficult_sounds": info.difficult_sounds[:2]  # 상위 2개
+                })
+                total_difficulty += info.difficulty_level
+
+        avg_difficulty = total_difficulty / len(word_analyses) if word_analyses else 1
+
+        # 연음/연결 발음 분석
+        linking_notes = self._analyze_linking(words, language)
+
+        # 억양 패턴 제안
+        intonation = self._suggest_intonation(sentence, language)
+
+        return {
+            "sentence": sentence,
+            "word_count": len(words),
+            "word_analyses": word_analyses,
+            "average_difficulty": round(avg_difficulty, 1),
+            "linking_notes": linking_notes,
+            "intonation_suggestion": intonation,
+            "practice_tips": self._generate_practice_tips(word_analyses, language)
+        }
+
+    def _analyze_linking(self, words: List[str], language: str) -> List[str]:
+        """연음/연결 발음 분석."""
+        if language != "en":
+            return []
+
+        notes = []
+        vowels = "aeiouAEIOU"
+
+        for i in range(len(words) - 1):
+            word1 = words[i].rstrip(".,!?;:")
+            word2 = words[i + 1]
+
+            if not word1 or not word2:
+                continue
+
+            last_char = word1[-1].lower()
+            first_char = word2[0].lower()
+
+            # 자음 -> 모음: 연결 발음
+            if last_char not in vowels and first_char in vowels:
+                notes.append(f"Link '{word1}' to '{word2}': Connect the final consonant to the next vowel")
+
+            # 모음 -> 모음: 글라이드 삽입
+            elif last_char in vowels and first_char in vowels:
+                if last_char in "iey":
+                    notes.append(f"'{word1} {word2}': Add a slight 'y' sound between words")
+                elif last_char in "ouw":
+                    notes.append(f"'{word1} {word2}': Add a slight 'w' sound between words")
+
+        return notes[:3]  # 최대 3개
+
+    def _suggest_intonation(self, sentence: str, language: str) -> str:
+        """억양 패턴 제안."""
+        sentence = sentence.strip()
+
+        if sentence.endswith("?"):
+            if sentence.lower().startswith(("do", "does", "did", "is", "are", "was", "were", "can", "will", "should")):
+                return "Yes/No question: Rising intonation at the end ↗"
+            elif sentence.lower().startswith(("what", "where", "when", "why", "how", "who")):
+                return "Wh-question: Falling intonation at the end ↘"
+            return "Question: Generally rising intonation ↗"
+
+        elif sentence.endswith("!"):
+            return "Exclamation: Strong stress on key words, falling at end ↘"
+
+        elif "," in sentence:
+            return "List/complex sentence: Rise at commas, fall at the end ↗...↗...↘"
+
+        else:
+            return "Statement: Slight fall at the end for finality ↘"
+
+    def _generate_practice_tips(
+        self,
+        word_analyses: List[Dict],
+        language: str
+    ) -> List[str]:
+        """연습 팁 생성."""
+        tips = []
+
+        # 가장 어려운 단어 찾기
+        difficult_words = [w for w in word_analyses if w["difficulty"] >= 3]
+        if difficult_words:
+            words = ", ".join(w["word"] for w in difficult_words[:3])
+            tips.append(f"Focus on these challenging words: {words}")
+
+        # 공통 어려운 소리 찾기
+        all_sounds = []
+        for w in word_analyses:
+            all_sounds.extend([s["sound"] for s in w.get("difficult_sounds", [])])
+
+        if all_sounds:
+            common_sound = max(set(all_sounds), key=all_sounds.count)
+            tips.append(f"Practice the '{common_sound}' sound - it appears multiple times")
+
+        tips.append("Record yourself and compare with the TTS audio")
+        tips.append("Practice slowly first, then gradually increase speed")
+
+        return tips
