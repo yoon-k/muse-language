@@ -2,6 +2,10 @@
 
 AI 기반 언어 학습 플랫폼 - 개인 맞춤형 언어 교육 시스템
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Visit%20Site-6366f1?style=for-the-badge)](https://yoon-k.github.io/muse-language/)
+
+> **[Demo 바로가기](https://yoon-k.github.io/muse-language/)** - AI 튜터 채팅, 발음 평가, 단어 학습, 게이미피케이션 체험
+
 ## Features
 
 ### AI 튜터 시스템
